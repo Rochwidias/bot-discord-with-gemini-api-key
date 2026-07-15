@@ -1,0 +1,18 @@
+{
+    "1214938871645741127": {
+        "queue": [],
+        "history": [],
+        "repeat": true,
+        "text_channel_id": 1526407555230728203,
+        "voice_channel_id": 1214938872123887649,
+        "player_message_id": 1526667957487407278,
+        "current_song": {
+            "webpage_url": "https://www.youtube.com/watch?v=tGv7CUutzqU",
+            "title": "The 1975 - About You (Official)",
+            "duration": 327,
+            "seek": 154.6934995651245,
+            "seek_offset": 0,
+            "start_time": 1784056372.3648865
+        }
+    }
+}
