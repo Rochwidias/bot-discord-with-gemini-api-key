@@ -63,6 +63,31 @@ def simpan_log(username, pesan, balasan, engine="AI"):
     except Exception as e:
         print(f"Gagal menyimpan log ke Supabase: {e}")
 
+SPOTIFY_REGEX = r"(?:https?://)?(?:open\.)?spotify\.com/(track|playlist|album)/([a-zA-Z0-9]+)"
+
+def extract_spotify_url(url):
+    import re
+    m = re.match(SPOTIFY_REGEX, url.strip())
+    if m:
+        return {"type": m.group(1), "id": m.group(2)}
+    return None
+
+async def cari_spotify_track(spotify_id):
+    import httpx
+    url = f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{spotify_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code == 200:
+                data = r.json()
+                return {
+                    "title": data.get("title", ""),
+                    "author": data.get("author_name", ""),
+                }
+    except Exception as e:
+        print(f"Gagal fetch Spotify oEmbed: {e}")
+    return None
+
 def bersihkan_ffmpeg():
     """Menghentikan proses ffmpeg yang berjalan di background."""
     try:
@@ -578,6 +603,13 @@ async def play(interaction: discord.Interaction, query: str):
         return await interaction.followup.send("❌ Gagal mengelola Voice Client.", ephemeral=True)
 
     search_query = query if query.startswith("http") else f"scsearch1:{query}"
+
+    spotify = extract_spotify_url(query)
+    if spotify and spotify["type"] == "track":
+        info = await cari_spotify_track(spotify["id"])
+        if info:
+            search_query = f"scsearch1:{info['author']} - {info['title']}"
+            await interaction.followup.send(f"🔍 Nyari **{info['title']}** - {info['author']} di SoundCloud...", ephemeral=True)
 
     try:
         data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
