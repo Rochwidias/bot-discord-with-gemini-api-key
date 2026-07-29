@@ -378,13 +378,15 @@ async def play_next(guild_id: int, text_channel=None):
             if len(history_queues[guild_id]) > 10: history_queues[guild_id].pop(0)
 
     if not queue and curr and not repeat_status.get(guild_id, False):
-        try:
-            data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch1:{curr['title']} related", download=False))
-            if 'entries' in data and data['entries']:
-                entry = data['entries'][0]
-                queue.append({'webpage_url': entry['webpage_url'], 'title': entry['title'], 'duration': entry['duration'], 'seek': 0})
-        except Exception as e: 
-            print(f"Autoplay failed for {guild_id}: {e}")
+        for src in [f"ytsearch1:{curr['title']}", f"scsearch1:{curr['title']}"]:
+            try:
+                data = await bot.loop.run_in_executor(None, lambda s=src: ytdl.extract_info(s, download=False))
+                if 'entries' in data and data['entries']:
+                    entry = data['entries'][0]
+                    queue.append({'webpage_url': entry['webpage_url'], 'title': entry['title'], 'duration': entry['duration'], 'seek': 0})
+                    break
+            except Exception as e:
+                print(f"Autoplay {src} failed: {e}")
 
     if not queue:
         current_song.pop(guild_id, None)
@@ -524,62 +526,71 @@ async def chat(interaction: discord.Interaction, pesan: str):
     await interaction.followup.send(final_reply, ephemeral=True)
     simpan_log(interaction.user.name, pesan, jawaban, engine=engine_used)
 
-@bot.tree.command(name="play", description="Putar lagu berdasarkan Judul atau URL 🎵")
+@bot.tree.command(name="play", description="Putar lagu (YouTube / SoundCloud) 🎵")
 async def play(interaction: discord.Interaction, query: str):
     await interaction.response.defer(ephemeral=True)
-    
+
     if not interaction.user.voice or not interaction.user.voice.channel:
         return await interaction.followup.send("❌ Masuk voice channel dulu! 🎤", ephemeral=True)
-    
+
     channel = interaction.user.voice.channel
     guild_id = interaction.guild.id
-    voice_client = interaction.guild.voice_client 
-    search_query = query if query.startswith("http") else f"ytsearch1:{query}"
-    
+    voice_client = interaction.guild.voice_client
+
     try:
         if not voice_client:
             voice_client = await channel.connect()
         elif voice_client.channel != channel:
             await voice_client.move_to(channel)
-        
+
         active_channels[guild_id] = {'text': interaction.channel.id, 'voice': channel.id}
-        
+
     except Exception as e:
         print(f"Error koneksi voice: {e}")
         return await interaction.followup.send("❌ Gagal mengelola Voice Client. Pastikan bot memiliki izin.", ephemeral=True)
 
-    try:
-        data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
-        
-        if not data or ('entries' in data and not data['entries']):
-            return await interaction.followup.send(f"❌ Lagu **'{query}'** tidak ditemukan.", ephemeral=True)
+    if query.startswith("http"):
+        sources = [query]
+    else:
+        sources = [f"ytsearch1:{query}", f"scsearch1:{query}"]
 
-        if 'entries' in data:
-            data = data['entries'][0]
-        
-        song_info = {
-            'webpage_url': data.get('webpage_url'),
-            'title': data.get('title', 'Unknown Title'),
-            'duration': data.get('duration', 0),
-            'seek': 0
-        }
-        
-        get_queue(guild_id).append(song_info)
-        save_state_all()
+    data = None
+    last_error = ""
+    for src in sources:
+        try:
+            data = await bot.loop.run_in_executor(None, lambda s=src: ytdl.extract_info(s, download=False))
+            if data and 'entries' in data and data['entries']:
+                data = data['entries'][0]
+                break
+            if data and not ('entries' in data):
+                break
+        except Exception as e:
+            last_error = str(e)
+            print(f"Source {src} gagal: {e}")
+            continue
 
-        if not voice_client.is_playing() and not voice_client.is_paused():
-            await play_next(guild_id, interaction.channel)
-            await interaction.followup.send(f"🎵 Memulai: **{song_info['title']}**", ephemeral=True)
-        else:
-            await update_player_message(guild_id, interaction.channel, resend=False)
-            await interaction.followup.send(f"✅ Masuk antrian: **{song_info['title']}**", ephemeral=True)
-
-    except Exception as e:
-        print(f"Error di /play: {e}")
-        msg = "❌ Gagal mengambil lagu."
-        if "Sign in to confirm" in str(e):
-            msg += " YouTube minta verifikasi. Owner perlu export cookies.txt."
+    if not data:
+        msg = "❌ Lagu tidak ditemukan di YouTube maupun SoundCloud."
+        if "Sign in to confirm" in last_error:
+            msg = "❌ YouTube minta verifikasi. Coba search lagu dari SoundCloud."
         return await interaction.followup.send(msg, ephemeral=True)
+
+    song_info = {
+        'webpage_url': data.get('webpage_url'),
+        'title': data.get('title', 'Unknown Title'),
+        'duration': data.get('duration', 0),
+        'seek': 0
+    }
+
+    get_queue(guild_id).append(song_info)
+    save_state_all()
+
+    if not voice_client.is_playing() and not voice_client.is_paused():
+        await play_next(guild_id, interaction.channel)
+        await interaction.followup.send(f"🎵 Memulai: **{song_info['title']}**", ephemeral=True)
+    else:
+        await update_player_message(guild_id, interaction.channel, resend=False)
+        await interaction.followup.send(f"✅ Masuk antrian: **{song_info['title']}**", ephemeral=True)
 
 @bot.tree.command(name="stop", description="Hentikan musik, bersihkan antrian, dan keluar dari VC.")
 async def stop_music(interaction: discord.Interaction):
