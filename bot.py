@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from ollama import AsyncClient
 import google.generativeai as genai
 from datetime import datetime
 import yt_dlp
@@ -10,18 +9,18 @@ import time
 import sys
 import os
 import platform 
-import json 
-import random 
+import random
+from dotenv import load_dotenv
+from db import supabase
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # --- ATURAN MAIN (HARAP GANTI KREDENSIAL INI) ---
 TOKEN = os.getenv('TOKEN_DISCORD_BOT')
 GEMINI_API_KEY = os.getenv('TOKEN_GEMINI_API')
-# Model konfigurasi
-OLLAMA_MODEL_NAME = 'llama3.2:3b'
-# Untuk model Gemini, Anda bisa memakai gemini-1.5-flash atau gemini-2.0-flash-lite-preview-02-05
 GEMINI_MODEL_NAME = 'gemini-3.1-flash-lite' 
 
-STATE_FILE = "queue_state.json" 
 SYSTEM_PROMPT = (
     "Asisten yang dikembangkan oleh @rennsh. "
     "Wajib menggunakan emoji"
@@ -38,7 +37,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-ollama_client = AsyncClient()
 
 # --- INSTANSIASI DATA GLOBAL ---
 queues = {}             # Antrian lagu: {guild_id: [song_dict, ...]}
@@ -50,11 +48,15 @@ repeat_status = {}      # Status repeat per server: {guild_id: boolean}
 
 # --- FUNGSI UTILITAS UTAMA ---
 def simpan_log(username, pesan, balasan, engine="AI"):
-    """Menyimpan log percakapan ke file chat_log.txt."""
-    waktu = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_text = f"[{waktu}] [{engine}] User: {username} | Pesan: {pesan} | Bot: {balasan}\n"
-    with open("chat_log.txt", "a", encoding="utf-8") as file:
-        file.write(log_text)
+    try:
+        supabase.table("chat_logs").insert({
+            "username": username,
+            "pesan": pesan,
+            "balasan": balasan,
+            "engine": engine
+        }).execute()
+    except Exception as e:
+        print(f"Gagal menyimpan log ke Supabase: {e}")
 
 def bersihkan_ffmpeg():
     """Menghentikan proses ffmpeg yang berjalan di background."""
@@ -274,20 +276,19 @@ class MusicControlView(discord.ui.View):
         for i, s in enumerate(q, 1): teks += f"`{i}.` {s['title']} `[{format_duration(s['duration'])}]`\n"
         await interaction.response.send_message(teks[:2000], ephemeral=True)
 
-# --- SAVE & RESTORE STATE VIA JSON ---
+# --- SAVE & RESTORE STATE VIA SUPABASE ---
 def save_state_all():
-    data = {}
     all_guilds = set(queues.keys()).union(set(current_song.keys()))
     for guild_id in all_guilds:
         q = get_queue(guild_id)
         curr = current_song.get(guild_id)
         hq = history_queues.get(guild_id, [])
         if not curr and not q and guild_id not in active_channels: continue
-        
-        guild_str = str(guild_id)
-        data[guild_str] = {
-            "queue": q, 
-            "history": hq, 
+
+        row = {
+            "guild_id": guild_id,
+            "queue": q,
+            "history": hq,
             "repeat": repeat_status.get(guild_id, False),
             "text_channel_id": active_channels.get(guild_id, {}).get('text'),
             "voice_channel_id": active_channels.get(guild_id, {}).get('voice'),
@@ -295,13 +296,14 @@ def save_state_all():
         }
         if curr:
             curr_copy = curr.copy()
-            current_elapsed = get_elapsed_time(guild_id) 
+            current_elapsed = get_elapsed_time(guild_id)
             curr_copy['seek'] = current_elapsed
-            data[guild_str]["current_song"] = curr_copy
-    try:
-        with open(STATE_FILE, "w") as f: json.dump(data, f, indent=4)
-    except Exception as e:
-        print(f"Gagal menyimpan state ke JSON: {e}")
+            row["current_song"] = curr_copy
+
+        try:
+            supabase.table("guild_states").upsert(row, on_conflict="guild_id").execute()
+        except Exception as e:
+            print(f"Gagal menyimpan state guild {guild_id} ke Supabase: {e}")
 
 async def state_saver_task():
     await bot.wait_until_ready()
@@ -384,7 +386,7 @@ async def play_next(guild_id: int, text_channel=None):
         opts = {'before_options': before_opts, 'options': '-vn'}
         
         # !!! PASTIKAN PATH FFmpeg DI BAWAH INI BENAR !!!
-        ffmpeg_path = r"F:\bot-discord\bin\ffmpeg\ffmpeg.exe" 
+        ffmpeg_path = os.path.join(BASE_DIR, "bin", "ffmpeg", "ffmpeg.exe") 
 
         audio_source = discord.FFmpegPCMAudio(data['url'], executable=ffmpeg_path, **opts)
         
@@ -409,17 +411,18 @@ async def on_ready():
     bot.loop.create_task(state_saver_task()) 
 
     try:
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, "r") as f: saved_states = json.load(f)
-            print("✅ Restoring state dari file JSON...")
-            for guild_str, state in saved_states.items():
-                guild_id = int(guild_str)
+        response = supabase.table("guild_states").select("*").execute()
+        saved_states = response.data
+        if saved_states:
+            print(f"✅ Restoring state dari Supabase ({len(saved_states)} guild)...")
+            for row in saved_states:
+                guild_id = row["guild_id"]
                 guild = bot.get_guild(guild_id)
                 if not guild: continue
 
-                vc_id = state.get("voice_channel_id")
-                tc_id = state.get("text_channel_id")
-                if not vc_id and not tc_id: continue 
+                vc_id = row.get("voice_channel_id")
+                tc_id = row.get("text_channel_id")
+                if not vc_id and not tc_id: continue
 
                 vc = guild.get_channel(vc_id)
                 tc = guild.get_channel(tc_id) if tc_id else None
@@ -427,22 +430,27 @@ async def on_ready():
                 if vc:
                     try:
                         await vc.connect()
-                        queues[guild_id] = state.get("queue", [])
-                        history_queues[guild_id] = state.get("history", [])
-                        repeat_status[guild_id] = state.get("repeat", False)
-                        if state.get("player_message_id"): player_messages[guild_id] = state.get("player_message_id")
-                        
-                        saved_curr = state.get("current_song")
-                        if saved_curr: queues[guild_id].insert(0, saved_curr)
-                        active_channels[guild_id] = {'text': tc.id if tc else None, 'voice': vc.id}
+                        queues[guild_id] = row.get("queue", [])
+                        history_queues[guild_id] = row.get("history", [])
+                        repeat_status[guild_id] = row.get("repeat", False)
+                        if row.get("player_message_id"):
+                            player_messages[guild_id] = row["player_message_id"]
+
+                        saved_curr = row.get("current_song")
+                        if saved_curr:
+                            queues[guild_id].insert(0, saved_curr)
+                        active_channels[guild_id] = {
+                            'text': tc.id if tc else None,
+                            'voice': vc.id
+                        }
 
                         print(f"[*] Menghubungkan ke Guild ID {guild_id}. Memutar ulang...")
-                        await play_next(guild_id, tc) 
-                    except Exception as e: 
+                        await play_next(guild_id, tc)
+                    except Exception as e:
                         print(f"🚨 Gagal me-restore state di guild {guild_id}: {e}")
+        else:
+            print("ℹ️ Tidak ada state tersimpan di Supabase. Mulai dari awal.")
 
-    except json.JSONDecodeError:
-        print("⚠️ File state JSON rusak atau kosong. Memulai dari awal.")
     except Exception as e:
         print(f"🛑 ERROR fatal saat startup/restore: {e}")
     finally:
@@ -452,57 +460,31 @@ async def on_ready():
 
 @bot.tree.command(name="chat", description="Ngobrol secara private dengan AI 🤖")
 async def chat(interaction: discord.Interaction, pesan: str):
-    """Fungsi untuk ngobrol menggunakan AI secara otomatis (Ollama fallback ke Gemini)."""
     await interaction.response.defer(ephemeral=True)
-    
-    jawaban = ""
-    bot_name = ""
-    engine_used = ""
-    
-    try:
-        # 1. PERCOBAAN PERTAMA: OLLAMA (Local AI)
-        response = await ollama_client.chat(model=OLLAMA_MODEL_NAME, messages=[
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': pesan},
-        ])
-        jawaban = response['message']['content']
-        bot_name = "@Rochwidias (via Ollama)"
-        engine_used = "OLLAMA"
-        
-    except Exception as e_ollama:
-        print(f"[Fallback] Ollama error/mati: {e_ollama}. Beralih ke Gemini...")
-        
-        try:
-            # 2. PERCOBAAN KEDUA: GEMINI (API Key)
-            model_gemini = genai.GenerativeModel(
-                model_name=GEMINI_MODEL_NAME, 
-                system_instruction=SYSTEM_PROMPT
-            )
-            response = await model_gemini.generate_content_async(pesan)
-            jawaban = response.text
-            bot_name = "@Rochwidias (via Gemini)"
-            engine_used = "GEMINI"
-            
-        except Exception as e_gemini:
-            # 3. KEDUANYA MATI / ERROR
-            print(f"[Error] Gemini juga error/mati: {e_gemini}")
-            await interaction.followup.send(
-                "Waduh, saat ini kedua AI (Ollama & Gemini) sedang bermasalah. Coba lagi nanti atau cek konsol host.", 
-                ephemeral=True
-            )
-            return # Hentikan fungsi di sini agar tidak error saat memproses jawaban kosong
 
-    # Menyusun Format Balasan
-    final_reply = f"✨ Bot (dibuat oleh {bot_name}):\n\n{jawaban}"
-    
-    # Mencegah limit 2000 karakter dari Discord
-    if len(final_reply) > 2000: 
+    try:
+        model_gemini = genai.GenerativeModel(
+            model_name=GEMINI_MODEL_NAME,
+            system_instruction=SYSTEM_PROMPT
+        )
+        response = await model_gemini.generate_content_async(pesan)
+        jawaban = response.text
+        engine_used = "GEMINI"
+
+    except Exception as e:
+        print(f"[Error] Gemini error: {e}")
+        await interaction.followup.send(
+            "Waduh, AI Gemini sedang bermasalah. Coba lagi nanti.", 
+            ephemeral=True
+        )
+        return
+
+    final_reply = f"✨ Bot (dibuat oleh @Rochwidias via Gemini):\n\n{jawaban}"
+
+    if len(final_reply) > 2000:
         final_reply = final_reply[:1997] + "..."
-    
-    # Kirim balasan ke user
+
     await interaction.followup.send(final_reply, ephemeral=True)
-    
-    # Simpan log dengan informasi engine mana yang akhirnya sukses dipakai
     simpan_log(interaction.user.name, pesan, jawaban, engine=engine_used)
 
 @bot.tree.command(name="play", description="Putar lagu berdasarkan Judul atau URL 🎵")

@@ -8,22 +8,6 @@
                 "duration": 263,
                 "seek": 0,
                 "seek_offset": 0,
-                "start_time": 1784563746.1906633
-            },
-            {
-                "webpage_url": "https://www.youtube.com/watch?v=RUR_YaFfZLM",
-                "title": "The 1975 - I'm In Love With You in the Live Lounge",
-                "duration": 263,
-                "seek": 0,
-                "seek_offset": 0,
-                "start_time": 1784563759.3876874
-            },
-            {
-                "webpage_url": "https://www.youtube.com/watch?v=RUR_YaFfZLM",
-                "title": "The 1975 - I'm In Love With You in the Live Lounge",
-                "duration": 263,
-                "seek": 0,
-                "seek_offset": 0,
                 "start_time": 1784563777.9305587
             },
             {
@@ -81,19 +65,35 @@
                 "seek": 0,
                 "seek_offset": 0,
                 "start_time": 1784563888.3288484
+            },
+            {
+                "webpage_url": "https://www.youtube.com/watch?v=RUR_YaFfZLM",
+                "title": "The 1975 - I'm In Love With You in the Live Lounge",
+                "duration": 263,
+                "seek": 21.64006519317627,
+                "seek_offset": 21.64006519317627,
+                "start_time": 1785343798.3166788
+            },
+            {
+                "webpage_url": "https://www.youtube.com/watch?v=RUR_YaFfZLM",
+                "title": "The 1975 - I'm In Love With You in the Live Lounge",
+                "duration": 263,
+                "seek": 0,
+                "seek_offset": 0,
+                "start_time": 1785344046.451348
             }
         ],
         "repeat": false,
         "text_channel_id": 1526407555230728203,
         "voice_channel_id": 1214938872123887649,
-        "player_message_id": 1528797758037950628,
+        "player_message_id": 1532069980185825422,
         "current_song": {
             "webpage_url": "https://www.youtube.com/watch?v=RUR_YaFfZLM",
             "title": "The 1975 - I'm In Love With You in the Live Lounge",
             "duration": 263,
-            "seek": 21.64006519317627,
+            "seek": 88.06405115127563,
             "seek_offset": 0,
-            "start_time": 1784564156.2476795
+            "start_time": 1785344313.7913253
         }
     }
 }
