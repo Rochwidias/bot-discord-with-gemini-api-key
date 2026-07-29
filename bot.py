@@ -30,6 +30,8 @@ SYSTEM_PROMPT = (
     "maksimal ketikan 1800"
 )
 
+play_attempts = {}
+
 # Inisialisasi API Google Gemini
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -374,6 +376,7 @@ async def play_next(guild_id: int, text_channel=None):
 
     if not queue:
         current_song.pop(guild_id, None)
+        play_attempts.pop(guild_id, None)
         save_state_all()
         await update_bot_presence()
         if text_channel and guild_id in player_messages:
@@ -382,6 +385,22 @@ async def play_next(guild_id: int, text_channel=None):
                 await msg.delete()
             except Exception as e: pass
             player_messages.pop(guild_id, None) 
+        return
+
+    attempt = play_attempts.get(guild_id, 0)
+    if attempt >= 3:
+        print(f"[{guild_id}] Gagal 3x berturut-turut. Hentikan pemutaran.")
+        queue.clear()
+        play_attempts.pop(guild_id, None)
+        current_song.pop(guild_id, None)
+        save_state_all()
+        await update_bot_presence()
+        if text_channel and guild_id in player_messages:
+            try:
+                msg = await text_channel.fetch_message(player_messages[guild_id])
+                await msg.delete()
+            except Exception: pass
+            player_messages.pop(guild_id, None)
         return
 
     next_info = queue.pop(0)
@@ -411,9 +430,11 @@ async def play_next(guild_id: int, text_channel=None):
         vc.play(discord.PCMVolumeTransformer(audio_source, volume=0.5), 
                 after=lambda e: asyncio.run_coroutine_threadsafe(play_next(guild_id, text_channel), bot.loop))
         
+        play_attempts[guild_id] = 0
         if text_channel: await update_player_message(guild_id, text_channel, resend=True)
     except Exception as e:
         print(f"Error saat memutar lagu {next_info['title']}: {e}. Mencoba skip.")
+        play_attempts[guild_id] = attempt + 1
         await asyncio.sleep(2)
         await play_next(guild_id, text_channel)
 

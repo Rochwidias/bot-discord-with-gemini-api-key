@@ -1,2 +1,3 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "deno"]
+aptPkgs = ["ffmpeg"]
+nixPkgs = ["deno"]
