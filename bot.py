@@ -398,7 +398,7 @@ async def play_next(guild_id: int, text_channel=None):
                 entry = data['entries'][0]
                 queue.append({'webpage_url': entry['webpage_url'], 'title': entry['title'], 'duration': entry['duration'], 'seek': 0})
         except Exception as e:
-            print(f"Autoplay SoundCloud failed: {e}")
+            print(f"Autoplay YouTube failed: {e}")
 
     if not queue:
         current_song.pop(guild_id, None)
@@ -576,7 +576,7 @@ async def chat(interaction: discord.Interaction, pesan: str):
     await interaction.followup.send(final_reply, ephemeral=True)
     simpan_log(interaction.user.name, pesan, jawaban, engine=engine_used)
 
-@bot.tree.command(name="play", description="Putar lagu dari SoundCloud 🎵")
+@bot.tree.command(name="play", description="Putar lagu dari YouTube / Spotify 🎵")
 async def play(interaction: discord.Interaction, query: str):
     await interaction.response.defer(ephemeral=True)
 
