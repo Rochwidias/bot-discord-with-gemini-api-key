@@ -343,6 +343,7 @@ ytdl_format_options = {
     'quiet': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
+    'geo_bypass': True,
 }
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
