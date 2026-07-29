@@ -369,7 +369,20 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'geo_bypass': True,
+    'extractor_args': {'youtube': {'player_client': ['android']}},
+    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 }
+COOKIES_FILE = os.path.join(BASE_DIR, "youtube_cookies.txt")
+_cookies_env = os.getenv("YOUTUBE_COOKIES")
+if _cookies_env:
+    with open(COOKIES_FILE, "w") as f:
+        f.write(_cookies_env)
+    ytdl_format_options['cookiefile'] = COOKIES_FILE
+    print("✅ Cookies YouTube dimuat dari YOUTUBE_COOKIES env")
+elif os.path.exists(COOKIES_FILE):
+    ytdl_format_options['cookiefile'] = COOKIES_FILE
+    print("✅ Cookies YouTube dimuat dari file lokal")
+
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 async def play_next(guild_id: int, text_channel=None):
@@ -648,7 +661,7 @@ async def play(interaction: discord.Interaction, query: str):
 
     except Exception as e:
         print(f"Error di /play: {e}")
-        await interaction.followup.send("❌ Gagal mengambil lagu dari YouTube.", ephemeral=True)
+        await interaction.followup.send(f"❌ Gagal mengambil lagu dari YouTube: `{e}`", ephemeral=True)
 
 @bot.tree.command(name="stop", description="Hentikan musik, bersihkan antrian, dan keluar dari VC.")
 async def stop_music(interaction: discord.Interaction):
