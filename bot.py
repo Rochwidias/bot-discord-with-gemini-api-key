@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import google.generativeai as genai
+from google import genai
 from datetime import datetime
 import yt_dlp
 import asyncio
@@ -11,7 +11,7 @@ import os
 import platform 
 import random
 from dotenv import load_dotenv
-from db import supabase
+from db import get_supabase
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -31,7 +31,7 @@ SYSTEM_PROMPT = (
 )
 
 # Inisialisasi API Google Gemini
-genai.configure(api_key=GEMINI_API_KEY)
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -48,8 +48,11 @@ repeat_status = {}      # Status repeat per server: {guild_id: boolean}
 
 # --- FUNGSI UTILITAS UTAMA ---
 def simpan_log(username, pesan, balasan, engine="AI"):
+    sb = get_supabase()
+    if not sb:
+        return
     try:
-        supabase.table("chat_logs").insert({
+        sb.table("chat_logs").insert({
             "username": username,
             "pesan": pesan,
             "balasan": balasan,
@@ -278,6 +281,7 @@ class MusicControlView(discord.ui.View):
 
 # --- SAVE & RESTORE STATE VIA SUPABASE ---
 def save_state_all():
+    sb = get_supabase()
     all_guilds = set(queues.keys()).union(set(current_song.keys()))
     for guild_id in all_guilds:
         q = get_queue(guild_id)
@@ -300,10 +304,11 @@ def save_state_all():
             curr_copy['seek'] = current_elapsed
             row["current_song"] = curr_copy
 
-        try:
-            supabase.table("guild_states").upsert(row, on_conflict="guild_id").execute()
-        except Exception as e:
-            print(f"Gagal menyimpan state guild {guild_id} ke Supabase: {e}")
+        if sb:
+            try:
+                sb.table("guild_states").upsert(row, on_conflict="guild_id").execute()
+            except Exception as e:
+                print(f"Gagal menyimpan state guild {guild_id} ke Supabase: {e}")
 
 async def state_saver_task():
     await bot.wait_until_ready()
@@ -411,8 +416,11 @@ async def on_ready():
     bot.loop.create_task(state_saver_task()) 
 
     try:
-        response = supabase.table("guild_states").select("*").execute()
-        saved_states = response.data
+        sb = get_supabase()
+        saved_states = []
+        if sb:
+            response = sb.table("guild_states").select("*").execute()
+            saved_states = response.data
         if saved_states:
             print(f"✅ Restoring state dari Supabase ({len(saved_states)} guild)...")
             for row in saved_states:
@@ -463,11 +471,13 @@ async def chat(interaction: discord.Interaction, pesan: str):
     await interaction.response.defer(ephemeral=True)
 
     try:
-        model_gemini = genai.GenerativeModel(
-            model_name=GEMINI_MODEL_NAME,
-            system_instruction=SYSTEM_PROMPT
+        response = await gemini_client.aio.models.generate_content(
+            model=GEMINI_MODEL_NAME,
+            contents=pesan,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT
+            )
         )
-        response = await model_gemini.generate_content_async(pesan)
         jawaban = response.text
         engine_used = "GEMINI"
 
