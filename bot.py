@@ -323,39 +323,25 @@ async def state_saver_task():
         await asyncio.sleep(5)
 
 # --- ENGINE PEMUTAR LAGU & AUTOPLAY ---
-cookies_file = os.path.join(BASE_DIR, "cookies.txt")
-cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
-if not os.path.exists(cookies_file) and cookies_b64:
-    try:
-        import base64
-        decoded = base64.b64decode(cookies_b64).decode("utf-8")
-        with open(cookies_file, "w", encoding="utf-8") as f:
-            f.write(decoded)
-        print("✅ Cookies berhasil di-decode dari YOUTUBE_COOKIES_B64")
-    except Exception as e:
-        print(f"⚠️ Gagal decode YOUTUBE_COOKIES_B64: {e}")
-
-if os.path.exists(cookies_file):
-    ytdl_format_options = {
-        'format': 'bestaudio/best',
-        'noplaylist': True,
-        'nocheckcertificate': True,
-        'quiet': True,
-        'default_search': 'auto',
-        'source_address': '0.0.0.0',
-        'cookiefile': cookies_file,
-        'extractor_args': {'youtube': {'player_client': ['web', 'web_safari']}},
-    }
+if platform.system() == "Windows":
+    _ffmpeg_test = os.path.join(BASE_DIR, "bin", "ffmpeg", "ffmpeg.exe")
 else:
-    ytdl_format_options = {
-        'format': 'bestaudio/best',
-        'noplaylist': True,
-        'nocheckcertificate': True,
-        'quiet': True,
-        'default_search': 'auto',
-        'source_address': '0.0.0.0',
-        'extractor_args': {'youtube': {'player_client': ['android_vr', 'tv', 'web_embedded'], 'skip': ['webpage', 'dash']}},
-    }
+    _ffmpeg_test = "ffmpeg"
+try:
+    import subprocess
+    subprocess.run([_ffmpeg_test, "-version"], capture_output=True, check=True)
+    print(f"✅ FFmpeg siap: {_ffmpeg_test}")
+except Exception:
+    print(f"⚠️ FFmpeg tidak ditemukan di: {_ffmpeg_test}")
+
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'nocheckcertificate': True,
+    'quiet': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',
+}
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 async def play_next(guild_id: int, text_channel=None):
@@ -378,15 +364,13 @@ async def play_next(guild_id: int, text_channel=None):
             if len(history_queues[guild_id]) > 10: history_queues[guild_id].pop(0)
 
     if not queue and curr and not repeat_status.get(guild_id, False):
-        for src in [f"ytsearch1:{curr['title']}", f"scsearch1:{curr['title']}"]:
-            try:
-                data = await bot.loop.run_in_executor(None, lambda s=src: ytdl.extract_info(s, download=False))
-                if 'entries' in data and data['entries']:
-                    entry = data['entries'][0]
-                    queue.append({'webpage_url': entry['webpage_url'], 'title': entry['title'], 'duration': entry['duration'], 'seek': 0})
-                    break
-            except Exception as e:
-                print(f"Autoplay {src} failed: {e}")
+        try:
+            data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(f"scsearch1:{curr['title']}", download=False))
+            if 'entries' in data and data['entries']:
+                entry = data['entries'][0]
+                queue.append({'webpage_url': entry['webpage_url'], 'title': entry['title'], 'duration': entry['duration'], 'seek': 0})
+        except Exception as e:
+            print(f"Autoplay SoundCloud failed: {e}")
 
     if not queue:
         current_song.pop(guild_id, None)
@@ -526,7 +510,7 @@ async def chat(interaction: discord.Interaction, pesan: str):
     await interaction.followup.send(final_reply, ephemeral=True)
     simpan_log(interaction.user.name, pesan, jawaban, engine=engine_used)
 
-@bot.tree.command(name="play", description="Putar lagu (YouTube / SoundCloud) 🎵")
+@bot.tree.command(name="play", description="Putar lagu dari SoundCloud 🎵")
 async def play(interaction: discord.Interaction, query: str):
     await interaction.response.defer(ephemeral=True)
 
@@ -542,55 +526,40 @@ async def play(interaction: discord.Interaction, query: str):
             voice_client = await channel.connect()
         elif voice_client.channel != channel:
             await voice_client.move_to(channel)
-
         active_channels[guild_id] = {'text': interaction.channel.id, 'voice': channel.id}
-
     except Exception as e:
         print(f"Error koneksi voice: {e}")
-        return await interaction.followup.send("❌ Gagal mengelola Voice Client. Pastikan bot memiliki izin.", ephemeral=True)
+        return await interaction.followup.send("❌ Gagal mengelola Voice Client.", ephemeral=True)
 
-    if query.startswith("http"):
-        sources = [query]
-    else:
-        sources = [f"ytsearch1:{query}", f"scsearch1:{query}"]
+    search_query = query if query.startswith("http") else f"scsearch1:{query}"
 
-    data = None
-    last_error = ""
-    for src in sources:
-        try:
-            data = await bot.loop.run_in_executor(None, lambda s=src: ytdl.extract_info(s, download=False))
-            if data and 'entries' in data and data['entries']:
-                data = data['entries'][0]
-                break
-            if data and not ('entries' in data):
-                break
-        except Exception as e:
-            last_error = str(e)
-            print(f"Source {src} gagal: {e}")
-            continue
+    try:
+        data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
+        if not data or ('entries' in data and not data['entries']):
+            return await interaction.followup.send(f"❌ Lagu **'{query}'** tidak ditemukan di SoundCloud.", ephemeral=True)
+        if 'entries' in data:
+            data = data['entries'][0]
 
-    if not data:
-        msg = "❌ Lagu tidak ditemukan di YouTube maupun SoundCloud."
-        if "Sign in to confirm" in last_error:
-            msg = "❌ YouTube minta verifikasi. Coba search lagu dari SoundCloud."
-        return await interaction.followup.send(msg, ephemeral=True)
+        song_info = {
+            'webpage_url': data.get('webpage_url'),
+            'title': data.get('title', 'Unknown Title'),
+            'duration': data.get('duration', 0),
+            'seek': 0
+        }
 
-    song_info = {
-        'webpage_url': data.get('webpage_url'),
-        'title': data.get('title', 'Unknown Title'),
-        'duration': data.get('duration', 0),
-        'seek': 0
-    }
+        get_queue(guild_id).append(song_info)
+        save_state_all()
 
-    get_queue(guild_id).append(song_info)
-    save_state_all()
+        if not voice_client.is_playing() and not voice_client.is_paused():
+            await play_next(guild_id, interaction.channel)
+            await interaction.followup.send(f"🎵 Memulai: **{song_info['title']}**", ephemeral=True)
+        else:
+            await update_player_message(guild_id, interaction.channel, resend=False)
+            await interaction.followup.send(f"✅ Masuk antrian: **{song_info['title']}**", ephemeral=True)
 
-    if not voice_client.is_playing() and not voice_client.is_paused():
-        await play_next(guild_id, interaction.channel)
-        await interaction.followup.send(f"🎵 Memulai: **{song_info['title']}**", ephemeral=True)
-    else:
-        await update_player_message(guild_id, interaction.channel, resend=False)
-        await interaction.followup.send(f"✅ Masuk antrian: **{song_info['title']}**", ephemeral=True)
+    except Exception as e:
+        print(f"Error di /play: {e}")
+        await interaction.followup.send("❌ Gagal mengambil lagu dari SoundCloud.", ephemeral=True)
 
 @bot.tree.command(name="stop", description="Hentikan musik, bersihkan antrian, dan keluar dari VC.")
 async def stop_music(interaction: discord.Interaction):
