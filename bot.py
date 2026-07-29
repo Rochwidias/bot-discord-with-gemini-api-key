@@ -343,7 +343,7 @@ else:
         'quiet': True,
         'default_search': 'auto',
         'source_address': '0.0.0.0',
-        'extractor_args': {'youtube': {'player_client': ['tv', 'web_embedded', 'web_safari'], 'skip': ['webpage']}},
+        'extractor_args': {'youtube': {'player_client': ['web', 'web_safari']}},
     }
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
