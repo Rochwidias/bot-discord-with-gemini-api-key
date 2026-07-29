@@ -49,6 +49,7 @@ current_song = {}       # Lagu yang sedang diputar: {guild_id: song_dict}
 active_channels = {}    # Channel teks dan voice aktif: {guild_id: {'text': id, 'voice': id}}
 player_messages = {}    # ID pesan panel utama musik: {guild_id: message_id}
 repeat_status = {}      # Status repeat per server: {guild_id: boolean}
+autoplay_status = {}    # {guild_id: boolean} default False
 
 # --- FUNGSI UTILITAS UTAMA ---
 def simpan_log(username, pesan, balasan, engine="AI"):
@@ -145,6 +146,7 @@ def build_player_embed(guild_id):
     curr = current_song.get(guild_id)
     q = get_queue(guild_id)
     rep = "Aktif 🔁" if repeat_status.get(guild_id, False) else "Nonaktif"
+    auto = "Nyala ♾️" if autoplay_status.get(guild_id, False) else "Mati"
     
     if not curr:
         return discord.Embed(title="🛑 Musik Berhenti", description="Antrian kosong. Tambahkan lagu dengan `/play`", color=discord.Color.red())
@@ -156,6 +158,7 @@ def build_player_embed(guild_id):
     progress_text = f"`[{format_duration(elapsed)} / {format_duration(dur)}]`"
     embed.add_field(name="Durasi", value=progress_text, inline=True)
     embed.add_field(name="Repeat", value=f"`{rep}`", inline=True)
+    embed.add_field(name="Autoplay", value=f"`{auto}`", inline=True)
     
     if q:
         up_next = "\n".join([f"`{i+1}.` {s['title']}" for i, s in enumerate(q[:3])])
@@ -166,7 +169,7 @@ def build_player_embed(guild_id):
 
 async def update_player_message(guild_id, text_channel, resend=False):
     embed = build_player_embed(guild_id)
-    view = MusicControlView()
+    view = MusicControlView(guild_id=guild_id)
     
     async for message in text_channel.history(limit=10):
         if message.author == bot.user and message.id != player_messages.get(guild_id):
@@ -195,9 +198,13 @@ async def update_player_message(guild_id, text_channel, resend=False):
 
 # --- TOMBOL INTERAKTIF UI (discord.ui.View) ---
 class MusicControlView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, guild_id=None):
         super().__init__(timeout=None)
-        
+        if guild_id and autoplay_status.get(guild_id, False):
+            for child in self.children:
+                if child.custom_id == "btn_autoplay":
+                    child.style = discord.ButtonStyle.success
+
     @discord.ui.button(emoji="⏯️", style=discord.ButtonStyle.primary, custom_id="btn_playpause")
     async def btn_playpause(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
@@ -298,6 +305,16 @@ class MusicControlView(discord.ui.View):
         for i, s in enumerate(q, 1): teks += f"`{i}.` {s['title']} `[{format_duration(s['duration'])}]`\n"
         await interaction.response.send_message(teks[:2000], ephemeral=True)
 
+    @discord.ui.button(label="Autoplay", emoji="♾️", style=discord.ButtonStyle.secondary, custom_id="btn_autoplay")
+    async def btn_autoplay(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        g_id = interaction.guild.id
+        autoplay_status[g_id] = not autoplay_status.get(g_id, False)
+        save_state_all()
+        await update_player_message(g_id, interaction.channel)
+        status = "Nyala ♾️" if autoplay_status[g_id] else "Mati"
+        await interaction.followup.send(f"♾️ Autoplay sekarang: **{status}**.", ephemeral=True)
+
 # --- SAVE & RESTORE STATE VIA SUPABASE ---
 def save_state_all():
     sb = get_supabase()
@@ -313,6 +330,7 @@ def save_state_all():
             "queue": q,
             "history": hq,
             "repeat": repeat_status.get(guild_id, False),
+            "autoplay": autoplay_status.get(guild_id, False),
             "volume": volumes.get(guild_id, 0.5),
             "text_channel_id": active_channels.get(guild_id, {}).get('text'),
             "voice_channel_id": active_channels.get(guild_id, {}).get('voice'),
@@ -361,10 +379,11 @@ async def state_saver_task():
                 q = get_queue(g_id)
                 curr = current_song.get(g_id)
                 if not q and not curr:
+                    idle_limit = 120 if autoplay_status.get(g_id, False) else 30
                     if g_id not in idle_timers:
                         idle_timers[g_id] = now
-                    elif now - idle_timers[g_id] >= 120:
-                        print(f"[{g_id}] Idle >2 menit, leave otomatis.")
+                    elif now - idle_timers[g_id] >= idle_limit:
+                        print(f"[{g_id}] Idle >{idle_limit}s, leave otomatis.")
                         vc.stop()
                         await vc.disconnect()
                         cleanup_guilds.add(g_id)
@@ -379,6 +398,7 @@ async def state_saver_task():
             play_attempts.pop(g_id, None)
             idle_timers.pop(g_id, None)
             volumes.pop(g_id, None)
+            autoplay_status.pop(g_id, None)
         if cleanup_guilds:
             save_state_all()
             print(f"🧹 Cleanup {len(cleanup_guilds)} guild idle")
@@ -441,7 +461,7 @@ async def play_next(guild_id: int, text_channel=None):
             history_queues[guild_id].append(curr)
             if len(history_queues[guild_id]) > 10: history_queues[guild_id].pop(0)
 
-    if not queue and curr and not repeat_status.get(guild_id, False):
+    if not queue and curr and autoplay_status.get(guild_id, False) and not repeat_status.get(guild_id, False):
         try:
             data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch:{curr['title']}", download=False))
             if 'entries' in data and data['entries']:
@@ -517,7 +537,7 @@ async def play_next(guild_id: int, text_channel=None):
 # --- STARTUP BOT & RESTORE STATE ---
 @bot.event
 async def on_ready():
-    bot.add_view(MusicControlView()) 
+    bot.add_view(MusicControlView(guild_id=None)) 
     await bot.tree.sync() 
     print('======================================')
     print(f'Bot siap! | User: {bot.user}')
@@ -570,6 +590,7 @@ async def on_ready():
                         queues[guild_id] = row.get("queue", [])
                         history_queues[guild_id] = row.get("history", [])
                         repeat_status[guild_id] = row.get("repeat", False)
+                        autoplay_status[guild_id] = row.get("autoplay", False)
                         volumes[guild_id] = row.get("volume", 0.5)
                         if row.get("player_message_id"):
                             player_messages[guild_id] = row["player_message_id"]
