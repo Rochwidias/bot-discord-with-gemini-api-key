@@ -393,7 +393,7 @@ async def play_next(guild_id: int, text_channel=None):
 
     if not queue and curr and not repeat_status.get(guild_id, False):
         try:
-            data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(f"scsearch1:{curr['title']}", download=False))
+            data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch:{curr['title']}", download=False))
             if 'entries' in data and data['entries']:
                 entry = data['entries'][0]
                 queue.append({'webpage_url': entry['webpage_url'], 'title': entry['title'], 'duration': entry['duration'], 'seek': 0})
@@ -495,14 +495,9 @@ async def on_ready():
                 vc = guild.get_channel(vc_id)
                 tc = guild.get_channel(tc_id) if tc_id else None
 
-                # Hapus state lama yg pake YouTube
                 row_queue = row.get("queue", [])
                 row_history = row.get("history", [])
                 saved_curr = row.get("current_song")
-                for lst in [row_queue, row_history]:
-                    lst[:] = [s for s in lst if "youtube" not in s.get("webpage_url", "")]
-                if saved_curr and "youtube" in saved_curr.get("webpage_url", ""):
-                    saved_curr = None
 
                 if sb:
                     try:
@@ -602,7 +597,7 @@ async def play(interaction: discord.Interaction, query: str):
         print(f"Error koneksi voice: {e}")
         return await interaction.followup.send("❌ Gagal mengelola Voice Client.", ephemeral=True)
 
-    search_query = query if query.startswith("http") else f"scsearch1:{query}"
+    search_query = query if query.startswith("http") else f"ytsearch:{query}"
 
     spotify_items = None
     if "spotify.com" in query:
@@ -611,16 +606,16 @@ async def play(interaction: discord.Interaction, query: str):
             return await interaction.followup.send(f"❌ Spotify error: {err}", ephemeral=True)
         if spotify_items:
             item = spotify_items[0]
-            search_query = f"scsearch1:{item['artist']} - {item['title']}"
+            search_query = f"ytsearch:{item['artist']} - {item['title']}"
             if len(spotify_items) > 1:
                 await interaction.followup.send(f"📀 Lagi muterin **{len(spotify_items)}** track dari playlist...", ephemeral=True)
             else:
-                await interaction.followup.send(f"🔍 Nyari **{item['title']}** - {item['artist']} di SoundCloud...", ephemeral=True)
+                await interaction.followup.send(f"🔍 Nyari **{item['title']}** - {item['artist']} di YouTube...", ephemeral=True)
 
     try:
         data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
         if not data or ('entries' in data and not data['entries']):
-            return await interaction.followup.send(f"❌ Lagu **'{query}'** tidak ditemukan di SoundCloud.", ephemeral=True)
+            return await interaction.followup.send(f"❌ Lagu **'{query}'** tidak ditemukan di YouTube.", ephemeral=True)
         if 'entries' in data:
             data = data['entries'][0]
 
@@ -635,7 +630,7 @@ async def play(interaction: discord.Interaction, query: str):
         if "spotify.com" in query and spotify_items and len(spotify_items) > 1:
             for item in spotify_items[1:]:
                 try:
-                    d = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(f"scsearch1:{item['artist']} - {item['title']}", download=False))
+                    d = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch:{item['artist']} - {item['title']}", download=False))
                     if d and 'entries' in d and d['entries']:
                         e = d['entries'][0]
                         get_queue(guild_id).append({'webpage_url': e['webpage_url'], 'title': e['title'], 'duration': e['duration'], 'seek': 0})
@@ -653,7 +648,7 @@ async def play(interaction: discord.Interaction, query: str):
 
     except Exception as e:
         print(f"Error di /play: {e}")
-        await interaction.followup.send("❌ Gagal mengambil lagu dari SoundCloud.", ephemeral=True)
+        await interaction.followup.send("❌ Gagal mengambil lagu dari YouTube.", ephemeral=True)
 
 @bot.tree.command(name="stop", description="Hentikan musik, bersihkan antrian, dan keluar dari VC.")
 async def stop_music(interaction: discord.Interaction):
