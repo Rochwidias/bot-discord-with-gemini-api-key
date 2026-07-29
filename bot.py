@@ -329,7 +329,9 @@ ytdl_format_options = {
     'nocheckcertificate': True,
     'quiet': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'
+    'source_address': '0.0.0.0',
+    'extractor_args': {'youtube': {'player_client': ['android']}},
+    'js_runtime': 'deno'
 }
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
