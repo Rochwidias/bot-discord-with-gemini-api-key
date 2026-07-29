@@ -31,6 +31,8 @@ SYSTEM_PROMPT = (
 )
 
 play_attempts = {}
+idle_timers = {}      # {guild_id: timestamp} — kapan mulai idle
+volumes = {}          # {guild_id: float 0.0-2.0}
 
 # Inisialisasi API Google Gemini
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -128,19 +130,9 @@ def get_elapsed_time(guild_id):
 async def update_bot_presence():
     curr = next(iter(current_song.values()), None)
     if curr:
-        start_ts = curr.get('start_time', time.time())
         await bot.change_presence(activity=discord.Activity(
             type=discord.ActivityType.listening,
-            name=curr['title'],
-            details=f"Memutar: {curr['title']}",
-            state=f"Durasi: {format_duration(curr.get('duration', 0))}",
-            assets={
-                "large_image": "https://cdn-icons-png.flaticon.com/512/3114/3114846.png",
-                "large_text": "Music Player",
-                "small_image": "https://cdn-icons-png.flaticon.com/512/3114/3114846.png",
-                "small_text": "Playing"
-            },
-            start=start_ts
+            name=curr['title']
         ))
     else:
         await bot.change_presence(activity=discord.Activity(
@@ -321,6 +313,7 @@ def save_state_all():
             "queue": q,
             "history": hq,
             "repeat": repeat_status.get(guild_id, False),
+            "volume": volumes.get(guild_id, 0.5),
             "text_channel_id": active_channels.get(guild_id, {}).get('text'),
             "voice_channel_id": active_channels.get(guild_id, {}).get('voice'),
             "player_message_id": player_messages.get(guild_id)
@@ -340,6 +333,9 @@ def save_state_all():
 async def state_saver_task():
     await bot.wait_until_ready()
     while not bot.is_closed():
+        now = time.time()
+
+        # 1. Save state
         if current_song or queues:
             save_state_all()
             for g_id, curr in list(current_song.items()):
@@ -347,7 +343,48 @@ async def state_saver_task():
                     tc = bot.get_channel(active_channels[g_id].get('text'))
                     if tc: 
                         await update_player_message(g_id, tc, resend=False)
-        await asyncio.sleep(5)
+
+        # 2. Auto-leave & RAM cleanup
+        cleanup_guilds = set()
+        for g_id in list(active_channels.keys()):
+            guild = bot.get_guild(g_id)
+            if not guild:
+                cleanup_guilds.add(g_id)
+                continue
+            vc = guild.voice_client
+            if not vc:
+                cleanup_guilds.add(g_id)
+                continue
+            if vc.is_playing() or vc.is_paused():
+                idle_timers.pop(g_id, None)
+            else:
+                q = get_queue(g_id)
+                curr = current_song.get(g_id)
+                if not q and not curr:
+                    if g_id not in idle_timers:
+                        idle_timers[g_id] = now
+                    elif now - idle_timers[g_id] >= 120:
+                        print(f"[{g_id}] Idle >2 menit, leave otomatis.")
+                        vc.stop()
+                        await vc.disconnect()
+                        cleanup_guilds.add(g_id)
+
+        for g_id in cleanup_guilds:
+            queues.pop(g_id, None)
+            history_queues.pop(g_id, None)
+            current_song.pop(g_id, None)
+            active_channels.pop(g_id, None)
+            player_messages.pop(g_id, None)
+            repeat_status.pop(g_id, None)
+            play_attempts.pop(g_id, None)
+            idle_timers.pop(g_id, None)
+            volumes.pop(g_id, None)
+        if cleanup_guilds:
+            save_state_all()
+            print(f"🧹 Cleanup {len(cleanup_guilds)} guild idle")
+
+        await update_bot_presence()
+        await asyncio.sleep(10)
 
 # --- ENGINE PEMUTAR LAGU & AUTOPLAY ---
 if platform.system() == "Windows":
@@ -363,7 +400,7 @@ except Exception:
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'noplaylist': True,
+    'noplaylist': False,
     'nocheckcertificate': True,
     'quiet': True,
     'default_search': 'auto',
@@ -466,7 +503,7 @@ async def play_next(guild_id: int, text_channel=None):
 
         audio_source = discord.FFmpegPCMAudio(data['url'], executable=ffmpeg_path, **opts)
         
-        vc.play(discord.PCMVolumeTransformer(audio_source, volume=0.5), 
+        vc.play(discord.PCMVolumeTransformer(audio_source, volume=volumes.get(guild_id, 0.5)), 
                 after=lambda e: asyncio.run_coroutine_threadsafe(play_next(guild_id, text_channel), bot.loop))
         
         play_attempts[guild_id] = 0
@@ -533,6 +570,7 @@ async def on_ready():
                         queues[guild_id] = row.get("queue", [])
                         history_queues[guild_id] = row.get("history", [])
                         repeat_status[guild_id] = row.get("repeat", False)
+                        volumes[guild_id] = row.get("volume", 0.5)
                         if row.get("player_message_id"):
                             player_messages[guild_id] = row["player_message_id"]
 
@@ -627,10 +665,34 @@ async def play(interaction: discord.Interaction, query: str):
 
     try:
         data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
-        if not data or ('entries' in data and not data['entries']):
-            return await interaction.followup.send(f"❌ Lagu **'{query}'** tidak ditemukan di YouTube.", ephemeral=True)
-        if 'entries' in data:
-            data = data['entries'][0]
+        if not data:
+            return await interaction.followup.send(f"❌ Gagal ambil data.", ephemeral=True)
+
+        is_search = search_query.startswith("ytsearch:")
+        is_playlist = 'entries' in data and data.get('extractor') and 'playlist' in data.get('extractor', '').lower()
+
+        if is_playlist:
+            entries = [e for e in data['entries'] if e]
+            if not entries:
+                return await interaction.followup.send(f"❌ Playlist kosong.", ephemeral=True)
+            for entry in entries:
+                get_queue(guild_id).append({
+                    'webpage_url': entry.get('webpage_url'),
+                    'title': entry.get('title', 'Unknown'),
+                    'duration': entry.get('duration', 0),
+                    'seek': 0
+                })
+            await interaction.followup.send(f"📑 **{len(entries)}** lagu dari playlist masuk antrian.", ephemeral=True)
+            save_state_all()
+            if not voice_client.is_playing() and not voice_client.is_paused():
+                await play_next(guild_id, interaction.channel)
+            else:
+                await update_player_message(guild_id, interaction.channel, resend=False)
+            return
+        elif is_search or 'entries' in data:
+            data = data['entries'][0] if data['entries'] else None
+            if not data:
+                return await interaction.followup.send(f"❌ Lagu **'{query}'** tidak ditemukan.", ephemeral=True)
 
         song_info = {
             'webpage_url': data.get('webpage_url'),
@@ -688,6 +750,94 @@ async def stop_music(interaction: discord.Interaction):
     await update_bot_presence()
     
     return await interaction.response.send_message("🛑 Musik dihentikan total, antrian dihapus.", ephemeral=True)
+
+@bot.tree.command(name="leave", description="Keluar dari VC tanpa hapus antrian.")
+async def leave_vc(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if not vc:
+        return await interaction.response.send_message("Gak lagi di Voice Channel.", ephemeral=True)
+    g_id = interaction.guild.id
+    vc.stop()
+    await vc.disconnect()
+    idle_timers.pop(g_id, None)
+    await update_bot_presence()
+    await interaction.response.send_message("👋 Keluar dari Voice Channel. Antrian disimpan.", ephemeral=True)
+
+@bot.tree.command(name="clear", description="Hapus semua antrian tanpa stop.")
+async def clear_queue(interaction: discord.Interaction):
+    g_id = interaction.guild.id
+    q = get_queue(g_id)
+    if not q:
+        return await interaction.response.send_message("Antrian udah kosong.", ephemeral=True)
+    q.clear()
+    history_queues.pop(g_id, None)
+    save_state_all()
+    await update_player_message(g_id, interaction.channel)
+    await interaction.response.send_message("🗑️ Antrian dibersihkan.", ephemeral=True)
+
+@bot.tree.command(name="volume", description="Atur volume 0-200%")
+async def set_volume(interaction: discord.Interaction, persen: int):
+    if persen < 0 or persen > 200:
+        return await interaction.response.send_message("❌ Volume 0-200 aja.", ephemeral=True)
+    g_id = interaction.guild.id
+    vol = persen / 100
+    volumes[g_id] = vol
+    vc = interaction.guild.voice_client
+    if vc and vc.source and hasattr(vc.source, 'volume'):
+        vc.source.volume = vol
+    save_state_all()
+    await interaction.response.send_message(f"🔊 Volume → **{persen}%**", ephemeral=True)
+
+@bot.tree.command(name="queue", description="Tampilkan semua antrian.")
+async def show_queue(interaction: discord.Interaction):
+    g_id = interaction.guild.id
+    q = get_queue(g_id)
+    if not q:
+        return await interaction.response.send_message("Antrian kosong.", ephemeral=True)
+    curr = current_song.get(g_id)
+    teks = ""
+    if curr:
+        teks += f"▶️ **Sekarang:** {curr['title']} `[{format_duration(curr.get('duration', 0))}]`\n\n"
+    teks += "**📜 Antrian:**\n"
+    for i, s in enumerate(q, 1):
+        teks += f"`{i}.` {s['title']} `[{format_duration(s['duration'])}]`\n"
+    await interaction.response.send_message(teks[:2000], ephemeral=True)
+
+@bot.tree.command(name="remove", description="Hapus lagu dari antrian (nomor).")
+async def remove_queue(interaction: discord.Interaction, nomor: int):
+    g_id = interaction.guild.id
+    q = get_queue(g_id)
+    if nomor < 1 or nomor > len(q):
+        return await interaction.response.send_message(f"❌ Nomor 1-{len(q)} aja.", ephemeral=True)
+    removed = q.pop(nomor - 1)
+    save_state_all()
+    await update_player_message(g_id, interaction.channel)
+    await interaction.response.send_message(f"🗑️ **{removed['title']}** dihapus dari antrian.", ephemeral=True)
+
+@bot.tree.command(name="now", description="Lagu yang sedang diputar.")
+async def now_playing(interaction: discord.Interaction):
+    g_id = interaction.guild.id
+    curr = current_song.get(g_id)
+    if not curr:
+        return await interaction.response.send_message("❌ Gak ada lagu yang diputar.", ephemeral=True)
+
+    elapsed = get_elapsed_time(g_id)
+    dur = curr.get('duration', 0) or 1
+    bar_len = 20
+    pos = min(int(elapsed / dur * bar_len), bar_len)
+    bar = "🟢" + "▬" * pos + "🔘" + "▬" * (bar_len - pos - 1) if pos < bar_len else "🟢" + "▬" * bar_len + "🔘"
+    embed = discord.Embed(title="🎶 Now Playing", description=f"**{curr['title']}**", color=discord.Color.green())
+    embed.add_field(name="Progress", value=f"{bar}\n`[{format_duration(elapsed)} / {format_duration(dur)}]`", inline=False)
+    vol = volumes.get(g_id, 0.5)
+    embed.add_field(name="Volume", value=f"🔊 {int(vol * 100)}%", inline=True)
+    rep = "Aktif 🔁" if repeat_status.get(g_id, False) else "Nonaktif"
+    embed.add_field(name="Repeat", value=f"`{rep}`", inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="ping", description="Cek delay bot.")
+async def ping(interaction: discord.Interaction):
+    ms = round(bot.latency * 1000)
+    await interaction.response.send_message(f"🏓 Pong! `{ms}ms`", ephemeral=True)
 
 def main():
     while True:
