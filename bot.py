@@ -343,7 +343,7 @@ else:
         'quiet': True,
         'default_search': 'auto',
         'source_address': '0.0.0.0',
-        'extractor_args': {'youtube': {'player_client': ['android_sdkless', 'tv', 'web_safari']}},
+        'extractor_args': {'youtube': {'player_client': ['tv', 'web_embedded', 'web_safari'], 'skip': ['webpage']}},
     }
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
@@ -565,7 +565,10 @@ async def play(interaction: discord.Interaction, query: str):
 
     except Exception as e:
         print(f"Error di /play: {e}")
-        return await interaction.followup.send("❌ Gagal mengambil lagu karena error internal.", ephemeral=True)
+        msg = "❌ Gagal mengambil lagu."
+        if "Sign in to confirm" in str(e):
+            msg += " YouTube minta verifikasi. Owner perlu export cookies.txt."
+        return await interaction.followup.send(msg, ephemeral=True)
 
 @bot.tree.command(name="stop", description="Hentikan musik, bersihkan antrian, dan keluar dari VC.")
 async def stop_music(interaction: discord.Interaction):
