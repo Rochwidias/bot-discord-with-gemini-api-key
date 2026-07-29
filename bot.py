@@ -63,42 +63,28 @@ def simpan_log(username, pesan, balasan, engine="AI"):
     except Exception as e:
         print(f"Gagal menyimpan log ke Supabase: {e}")
 
-# --- SPOTIFY (API key akun dummy) ---
-_spotify = None
-def get_spotify():
-    global _spotify
-    if _spotify:
-        return _spotify
-    cid = os.getenv("SPOTIFY_CLIENT_ID")
-    sec = os.getenv("SPOTIFY_CLIENT_SECRET")
-    if cid and sec:
-        import spotipy
-        from spotipy.oauth2 import SpotifyClientCredentials
-        _spotify = spotipy.Spotify(client_credentials_manager=SpotifyClientCredentials(client_id=cid, client_secret=sec))
-    return _spotify
-
+# --- SPOTIFY (via yt-dlp, tanpa API key) ---
 import re as _re
 
 async def cari_spotify(query):
-    sp = get_spotify()
-    if not sp:
-        return None, "SPOTIFY_CLIENT_ID / SECRET belum diisi"
     m = _re.match(r"(?:https?://)?(?:open\.)?spotify\.com/(track|playlist|album)/([a-zA-Z0-9]+)", query.strip())
     if not m:
         return None, "Link Spotify tidak valid"
     tipe, sid = m.group(1), m.group(2)
     try:
-        loop = asyncio.get_event_loop()
-        if tipe == "track":
-            track = await loop.run_in_executor(None, lambda: sp.track(sid))
-            return [{"title": track["name"], "artist": track["artists"][0]["name"]}], None
-        elif tipe == "album":
-            results = await loop.run_in_executor(None, lambda: sp.album_tracks(sid))
-            return [{"title": t["name"], "artist": t["artists"][0]["name"]} for t in results["items"]], None
-        elif tipe == "playlist":
-            results = await loop.run_in_executor(None, lambda: sp.playlist_items(sid, fields="items.track.name,items.track.artists.name,total", limit=50))
-            tracks = [i["track"] for i in results["items"] if i.get("track")]
-            return [{"title": t["name"], "artist": t["artists"][0]["name"]} for t in tracks], None
+        data = await asyncio.get_event_loop().run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
+        if not data:
+            return None, "Gagal ambil data dari Spotify"
+        items = []
+        if 'entries' in data:
+            for e in data['entries']:
+                if e:
+                    items.append({"title": e.get("title", ""), "artist": e.get("artist", "") or e.get("uploader", "")})
+        else:
+            items.append({"title": data.get("title", ""), "artist": data.get("artist", "") or data.get("uploader", "")})
+        if not items or not items[0]["title"]:
+            return None, "Gak dapet info lagu dari link itu"
+        return items, None
     except Exception as e:
         return None, str(e)
 
