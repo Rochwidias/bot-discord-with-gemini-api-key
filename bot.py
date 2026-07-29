@@ -324,6 +324,17 @@ async def state_saver_task():
 
 # --- ENGINE PEMUTAR LAGU & AUTOPLAY ---
 cookies_file = os.path.join(BASE_DIR, "cookies.txt")
+cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
+if not os.path.exists(cookies_file) and cookies_b64:
+    try:
+        import base64
+        decoded = base64.b64decode(cookies_b64).decode("utf-8")
+        with open(cookies_file, "w", encoding="utf-8") as f:
+            f.write(decoded)
+        print("✅ Cookies berhasil di-decode dari YOUTUBE_COOKIES_B64")
+    except Exception as e:
+        print(f"⚠️ Gagal decode YOUTUBE_COOKIES_B64: {e}")
+
 if os.path.exists(cookies_file):
     ytdl_format_options = {
         'format': 'bestaudio/best',
