@@ -469,6 +469,30 @@ async def on_ready():
                 vc = guild.get_channel(vc_id)
                 tc = guild.get_channel(tc_id) if tc_id else None
 
+                # Hapus state lama yg pake YouTube
+                row_queue = row.get("queue", [])
+                row_history = row.get("history", [])
+                saved_curr = row.get("current_song")
+                for lst in [row_queue, row_history]:
+                    lst[:] = [s for s in lst if "youtube" not in s.get("webpage_url", "")]
+                if saved_curr and "youtube" in saved_curr.get("webpage_url", ""):
+                    saved_curr = None
+
+                if sb:
+                    try:
+                        sb.table("guild_states").upsert({
+                            "guild_id": guild_id,
+                            "queue": row_queue,
+                            "history": row_history,
+                            "current_song": saved_curr,
+                        }, on_conflict="guild_id").execute()
+                    except Exception as e:
+                        print(f"Gagal update state guild {guild_id}: {e}")
+
+                if not row_queue and not saved_curr:
+                    print(f"ℹ️ Guild {guild_id}: Tidak ada lagu valid untuk di-restore.")
+                    continue
+
                 if vc:
                     try:
                         await vc.connect()
