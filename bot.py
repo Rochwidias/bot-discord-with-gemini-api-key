@@ -63,7 +63,7 @@ def simpan_log(username, pesan, balasan, engine="AI"):
     except Exception as e:
         print(f"Gagal menyimpan log ke Supabase: {e}")
 
-# --- SPOTIFY CLIENT ---
+# --- SPOTIFY (API key akun dummy) ---
 _spotify = None
 def get_spotify():
     global _spotify
@@ -77,25 +77,28 @@ def get_spotify():
         _spotify = spotipy.Spotify(client_credentials_manager=SpotifyClientCredentials(client_id=cid, client_secret=sec))
     return _spotify
 
+import re as _re
+
 async def cari_spotify(query):
     sp = get_spotify()
     if not sp:
         return None, "SPOTIFY_CLIENT_ID / SECRET belum diisi"
-    import re
-    m = re.match(r"(?:https?://)?(?:open\.)?spotify\.com/(track|playlist|album)/([a-zA-Z0-9]+)", query.strip())
+    m = _re.match(r"(?:https?://)?(?:open\.)?spotify\.com/(track|playlist|album)/([a-zA-Z0-9]+)", query.strip())
     if not m:
         return None, "Link Spotify tidak valid"
     tipe, sid = m.group(1), m.group(2)
     try:
+        loop = asyncio.get_event_loop()
         if tipe == "track":
-            track = sp.track(sid)
+            track = await loop.run_in_executor(None, lambda: sp.track(sid))
             return [{"title": track["name"], "artist": track["artists"][0]["name"]}], None
         elif tipe == "album":
-            results = sp.album_tracks(sid)
+            results = await loop.run_in_executor(None, lambda: sp.album_tracks(sid))
             return [{"title": t["name"], "artist": t["artists"][0]["name"]} for t in results["items"]], None
         elif tipe == "playlist":
-            results = sp.playlist_items(sid, fields="items.track.name,items.track.artists.name,total", limit=50)
-            return [{"title": i["track"]["name"], "artist": i["track"]["artists"][0]["name"]} for i in results["items"] if i.get("track")], None
+            results = await loop.run_in_executor(None, lambda: sp.playlist_items(sid, fields="items.track.name,items.track.artists.name,total", limit=50))
+            tracks = [i["track"] for i in results["items"] if i.get("track")]
+            return [{"title": t["name"], "artist": t["artists"][0]["name"]} for t in tracks], None
     except Exception as e:
         return None, str(e)
 
@@ -617,18 +620,17 @@ async def play(interaction: discord.Interaction, query: str):
 
     spotify_items = None
     if "spotify.com" in query:
-        spotify_items, err = await asyncio.to_thread(cari_spotify, query)
+        spotify_items, err = await cari_spotify(query)
         if err:
             return await interaction.followup.send(f"❌ Spotify error: {err}", ephemeral=True)
-        if not spotify_items:
-            return await interaction.followup.send("❌ Gak ada track di Spotify itu.", ephemeral=True)
-        item = spotify_items[0]
-        search_query = f"scsearch1:{item['artist']} - {item['title']}"
-        if len(spotify_items) > 1:
-            await interaction.followup.send(f"📀 Playlist {len(spotify_items)} track. Muterin dari **{item['title']}**...", ephemeral=True)
-        else:
-            await interaction.followup.send(f"🔍 Nyari **{item['title']}** - {item['artist']} di SoundCloud...", ephemeral=True)
-    
+        if spotify_items:
+            item = spotify_items[0]
+            search_query = f"scsearch1:{item['artist']} - {item['title']}"
+            if len(spotify_items) > 1:
+                await interaction.followup.send(f"📀 Lagi muterin **{len(spotify_items)}** track dari playlist...", ephemeral=True)
+            else:
+                await interaction.followup.send(f"🔍 Nyari **{item['title']}** - {item['artist']} di SoundCloud...", ephemeral=True)
+
     try:
         data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search_query, download=False))
         if not data or ('entries' in data and not data['entries']):
@@ -644,7 +646,7 @@ async def play(interaction: discord.Interaction, query: str):
         }
         get_queue(guild_id).append(song_info)
 
-        if spotify_items and len(spotify_items) > 1:
+        if "spotify.com" in query and spotify_items and len(spotify_items) > 1:
             for item in spotify_items[1:]:
                 try:
                     d = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(f"scsearch1:{item['artist']} - {item['title']}", download=False))
@@ -653,18 +655,15 @@ async def play(interaction: discord.Interaction, query: str):
                         get_queue(guild_id).append({'webpage_url': e['webpage_url'], 'title': e['title'], 'duration': e['duration'], 'seek': 0})
                 except:
                     continue
-            await interaction.followup.send(f"✅ **{len(spotify_items)}** track dari Spotify ditambahin ke antrian!", ephemeral=True)
 
         save_state_all()
 
         if not voice_client.is_playing() and not voice_client.is_paused():
             await play_next(guild_id, interaction.channel)
-            if not spotify_items or len(spotify_items) <= 1:
-                await interaction.followup.send(f"🎵 Memulai: **{song_info['title']}**", ephemeral=True)
+            await interaction.followup.send(f"🎵 Memulai: **{song_info['title']}**", ephemeral=True)
         else:
             await update_player_message(guild_id, interaction.channel, resend=False)
-            if not spotify_items or len(spotify_items) <= 1:
-                await interaction.followup.send(f"✅ Masuk antrian: **{song_info['title']}**", ephemeral=True)
+            await interaction.followup.send(f"✅ Masuk antrian: **{song_info['title']}**", ephemeral=True)
 
     except Exception as e:
         print(f"Error di /play: {e}")
