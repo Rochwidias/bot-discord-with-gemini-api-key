@@ -323,16 +323,28 @@ async def state_saver_task():
         await asyncio.sleep(5)
 
 # --- ENGINE PEMUTAR LAGU & AUTOPLAY ---
-ytdl_format_options = {
-    'format': 'bestaudio/best',
-    'noplaylist': True, 
-    'nocheckcertificate': True,
-    'quiet': True,
-    'default_search': 'auto',
-    'source_address': '0.0.0.0',
-    'extractor_args': {'youtube': {'player_client': ['android']}},
-    'js_runtime': 'deno'
-}
+cookies_file = os.path.join(BASE_DIR, "cookies.txt")
+if os.path.exists(cookies_file):
+    ytdl_format_options = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'quiet': True,
+        'default_search': 'auto',
+        'source_address': '0.0.0.0',
+        'cookiefile': cookies_file,
+        'extractor_args': {'youtube': {'player_client': ['web', 'web_safari']}},
+    }
+else:
+    ytdl_format_options = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'quiet': True,
+        'default_search': 'auto',
+        'source_address': '0.0.0.0',
+        'extractor_args': {'youtube': {'player_client': ['android_sdkless', 'tv', 'web_safari']}},
+    }
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 async def play_next(guild_id: int, text_channel=None):
