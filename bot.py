@@ -390,8 +390,10 @@ async def play_next(guild_id: int, text_channel=None):
             
         opts = {'before_options': before_opts, 'options': '-vn'}
         
-        # !!! PASTIKAN PATH FFmpeg DI BAWAH INI BENAR !!!
-        ffmpeg_path = os.path.join(BASE_DIR, "bin", "ffmpeg", "ffmpeg.exe") 
+        if platform.system() == "Windows":
+            ffmpeg_path = os.path.join(BASE_DIR, "bin", "ffmpeg", "ffmpeg.exe")
+        else:
+            ffmpeg_path = "ffmpeg" 
 
         audio_source = discord.FFmpegPCMAudio(data['url'], executable=ffmpeg_path, **opts)
         
